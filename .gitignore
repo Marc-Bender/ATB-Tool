@@ -1,1 +1,6 @@
 *.pdf
+*.txt
+*.csv
+*.swp
+.~lock.*
+
