@@ -13,7 +13,99 @@ inputfoldername = ""
 
 dryRun = 1
 
+class elementLine:
+    positionNr: str = ""
+    elementText: str = ""
+    quantity: str = ""
+    unitPrice: str = ""
+    elementTotal: str = ""
+    def __init__(self):
+        positionNr = ""
+        elementText = ""
+        quantity = ""
+        unitPrice = ""
+        elementTotal = ""
+
+def handleElementLine(elementLineObj, bz):
+    returnValue = [bz]
+    iterator = 0
+    if elementLine.elementTotal.__contains__("-"):
+        #negative number --> haben
+        returnValue[iterator].sollHabenKZ = "H"
+    else:
+        returnValue[iterator].sollHabenKZ = "S"
+    if elementLine.elementText.__contains__("Reparatur an o.g. Aufzugsanlage"):
+        # element is for repairs
+        returnValue[iterator].gegenkonto = "8403"
+        # filling the prices is not yet implemented
+    elif elementLine.elementText.__contains__("Notrufvertrag"):
+        returnValue[iterator].gegenkonto = "8402" # TODO: check if correct (duplicate entry in table)
+        #check if current year or previous year
+        matcherObj = re.compile(".*Vertragsjahr ([0-9]{4}).*").match(elementLine.elementText)
+        returnValue[iterator].umsatz = elementLine.elementTotal # for the inial line full price, then if current year inject partial lines with negative (ie inverted S/H)
+        if (
+                    (matcherObj)
+                and (returnValue[iterator].belegdatum.__contains__(matcherObj.group(1)))
+           ):
+            # current year, thus inject bz object
+            
+            iterator += 1
+            returnValue.append(bz)
+            if not (elementLine.quantity == 1):
+                # price is already given in smaller unit --> take that price for partial revokation
+                returnValue[iterator].umsatz = Decimal(float(elementLine.unitPrice.replace(",","."))).quantize(Decimal("0.01")) * (Decimal(float(elementLine.quantity)) - Decimal(1))
+                returnValue[iterator].umsatz = str(float(returnValue[iterator]))
+            else:
+                # price is given in one total for the entire year
+                returnValue[iterator].umsatz = Decimal(float(elementLine.unitPrice.replace(",","."))/12*11).quantize(Decimal("0.01"))
+            if returnValue[iterator - 1].sollHabenKZ == "S":
+                returnValue[iterator].sollHabenKZ = "H"
+            else:
+                returnValue[iterator].sollHabenKZ = "S"
+        elif (
+                    (matcherObj)
+                and not(returnValue[iterator].belegdatum.__contains__(matcherObj.group(1)))
+             ):
+            # previous year
+            returnValue[iterator].gegenkonto = "9999" # dummy for previous year overhang stuff
+    elif elementLine.elementText.__contains__("Wartung der Anlagen"):
+        # element is for maintainance
+        returnValue[iterator].gegenkonto = "8404"
+        matcherObj = re.compile(".*Wartungsjahr ([0-9]{4}).*").match(elementLine.elementText)
+        returnValue[iterator].umsatz = elementLine.elementTotal # for the inial line full price, then if current year inject partial lines with negative (ie inverted S/H)
+        if (
+                    (matcherObj)
+                and (returnValue[iterator].belegdatum.__contains__(matcherObj.group(1)))
+           ):
+            # current year, thus inject bz object
+            
+            iterator += 1
+            returnValue.append(bz)
+            if not (elementLine.quantity == 1):
+                # price is already given in smaller unit --> take that price for partial revokation
+                returnValue[iterator].umsatz = Decimal(float(elementLine.unitPrice.replace(",","."))).quantize(Decimal("0.01")) * (Decimal(float(elementLine.quantity)) - Decimal(1))
+                returnValue[iterator].umsatz = str(float(returnValue[iterator]))
+            else:
+                # price is given in one total for the entire year
+                returnValue[iterator].umsatz = Decimal(float(elementLine.unitPrice.replace(",","."))/12*11).quantize(Decimal("0.01"))
+            if returnValue[iterator - 1].sollHabenKZ == "S":
+                returnValue[iterator].sollHabenKZ = "H"
+            else:
+                returnValue[iterator].sollHabenKZ = "S"
+            if returnValue[iterator - 1].sollHabenKZ == "S":
+                returnValue[iterator].sollHabenKZ = "H"
+            else:
+                returnValue[iterator].sollHabenKZ = "S"
+        elif (
+                    (matcherObj)
+                and not(returnValue[iterator].belegdatum.__contains__(matcherObj.group(1)))
+             ):
+            # previous year
+            returnValue[iterator].gegenkonto = "8888" # dummy for previous year overhang stuff
+
 def getSpecialInformation(file,bz):
+    returnValue = [bz]
+    iterator = 0
     file = open(file, "r")
     linesOfFile = file.readlines()
     file.close()
@@ -32,12 +124,12 @@ def getSpecialInformation(file,bz):
                     matcherObj = re.compile("^.*([0-9\.],[0-9]{2})\s*$").match(linesOfFile[j+1])
                     if matcherObj:
                         # line matches
-                        bz.umsatz = matcherObj.group(1).replace(".","") # get total price and remove thousends deliminator
-                        bz.gegenkonto = "8337" 
-                        return # bz object is already filled --> function can terminate to allow writing the bz object to output file and continue with next file
+                        returnValue[iterator].umsatz = matcherObj.group(1).replace(".","") # get total price and remove thousends deliminator
+                        returnValue[iterator].gegenkonto = "8337" 
+                        return returnValue, iterator # bz object is already filled --> function can terminate to allow writing the bz object to output file and continue with next file
                     else:
                         print("Dateiformatfehler in Datei " + file)
-                        return
+                        return [],0
                 else:
                     # not found --> keep searching
                     pass
@@ -61,36 +153,67 @@ def getSpecialInformation(file,bz):
         else:
             # table header found but table end not reached --> do checks
             matcherObj = re.compile(".*^Bitte geben sie bei Zahlungen unbedingt die Rechnungsnummer an\..*$").match(linesOfFile[i])
+            elementLineObj = elementLine()
             if matcherObj:
-                # table end found --> end the loop
-                break
+                # table end found; but the handling of the element line(s) has not been done for the last element thus handle the element line then exit the loop, but then there is nothing to do anymore thus return from the function
+                handleElementLine(elementLine, returnValue[iterator]);
+                return returnValue, iterator
             else:
                 # table end not found check for various special cases
                 # check for initial line of multiline position first
-                matcherObj = re.compile("^\s*([0-9]+)\s*([0-9]+)\s*(.*)  \s*([0-9.]+,[0-9]{2})\s*([0-9.]+,[0-9]{2}.*$").match(linesOfFile[i])
+                matcherObj = re.compile("^\s*([0-9]+)\s*([0-9]+)\s*(.*)  \s*([0-9.]+,[0-9]{2})\s*([0-9.]+,[0-9]{2}).*$").match(linesOfFile[i])
                 if (
                             (matcherObj)
                         and (initialLineMulitlinePosFound == 0)
                    ):
                     #found initial line of multiline position and it is the first line of that kind
+                    #copy contents of that line in the elementLine element and keep walking through the table for remaining lines and elements
+                    #the element line will be evaluated once either another elementline is found or the table end is reached
                     initialLineMulitlinePosFound = 1
-                    #positionNr = matcherObj.group(1)
-                    #qty = matcherObj.group(2)
-                    positionText = matcherObj.group(3)
-                    #unitprice = matcherObj.group(4)
-                    #positionTotal = matcherObj.group(5)
-                else if initialLineMulitlinePosFound == 1:
-                    #consecutive line in multiline position ?
-                    matcherObj = re.compile("\s*[^\s]*\s*").match(linesOfFile[i])
+                    elementLine.positionNr = matcherObj.group(1)
+                    elementLine.quantity = matcherObj.group(2)
+                    elementLine.elementText = matcherObj.group(3)
+                    elementLine.matcherObj.group(4)
+                    elementLine.elementTotal = matcherObj.group(5)
+                elif initialLineMulitlinePosFound == 1:
+                    #does not match initial line pattern and initialline is already found thus may be consecutive line or empty line
+                    matcherObj = re.compile("\s*[^\s]+\s*").match(linesOfFile[i])
                     if matcherObj:
-                        #non empty line --> append to positionText
-                        positionText += linesOfFile[i] # will add entire line but since line only consists of whitespace and the text that is no big deal. Whitespace sequences >2 will be removed after conversion to CSV string and before writing to the file.
+                        #non empty line --> append to elementText
+                        elementLine.elementText += linesOfFile[i] # will add entire line but since line only consists of whitespace and the text that is no big deal. Whitespace sequences >2 will be removed after conversion to CSV string and before writing to the file.
                     else:
                         #empty line
                         pass
-                else: 
+                elif (
+                           (matcherObj)
+                        and(initialLineMulitlinePosFound == 1)
+                     ):
+
                     # initial line of multiline position but previous multiline position existed thus there needs to be special handling for writing the current bz object to the file and then creating a new one. 
-                    pass # dummy until feature is implemented
+                    # first store the contents of that line in seperate buffer
+                    newElementLine = elementLine()
+                    newElementLine.positionNr = matcherObj.group(1)
+                    newElementLine.quantity = matcherObj.group(2)
+                    newElementLine.elementText = matcherObj.group(3)
+                    newElementLine.matcherObj.group(4)
+                    newElementLine.elementTotal = matcherObj.group(5)
+                    # then evaluate old elementLine
+                    handleElementLine(elementLine, returnValue[iterator])
+                    # increment the iterator so that when the new elementline is fully filled and either the end of the table is reached or the next element line is found the another bz object is generated in the returnValue array
+                    iterator += 1
+                    returnValue.append(bz) # add the bz object (that has not been modified since all actions are directly done in the return value object) to the returnValue to essentially copy the common "meta" information (like invoice no. etc)
+                    # then replace old element line with new elementline and try to fill that to an end
+                    elementLine = newElementLine
+                else:
+                    # first element line may also be incomplete as in repair invoices... 
+                    # thus check for incomplete non empty line
+                    matcherObj = re.compile("\s*[^\s]+\s*").match(linesOfFile[i])
+                    if matcherObj:
+                        #non empty line --> append to elementText, since element Text is empty by default there is no harm in doing so
+                        elementLine.elementText += linesOfFile[i] # will add entire line but since line only consists of whitespace and the text that is no big deal. Whitespace sequences >2 will be removed after conversion to CSV string and before writing to the file.
+                    else:
+                        #empty line
+                        pass
 
 def cleanupDate(bz):
     matcherObj = re.compile("([0-9]{1,2})\.([0-9]{1,2})\.([0-9]{4})").match(bz.belegdatum)
