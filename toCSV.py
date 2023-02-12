@@ -35,7 +35,7 @@ regexEndbetrag = re.compile(".*Endbetrag EUR.*")
 regexGesamtsumme = re.compile("^.*([0-9\.],[0-9]{2})\s*$")
 regexElementLineFull = re.compile("^.*Pos\..*Menge.* Einh\..*Artikelbezeichnung.*Einzelpreis.*Gesamtpreis.*$")
 regexEndOfTable = re.compile("^.*Bitte geben Sie bei Zahlungen unbedingt die Rechnungsnummer an\..*$")
-regexInitialLine = re.compile("^\s*([0-9]+)\s*([0-9]+)\s*(.*)  \s*([0-9.]+,[0-9]{2})\s*([0-9.]+,[0-9]{2}).*$")
+regexInitialLine = re.compile("^\s*([0-9]+)\s*([0-9\,\. ]+)\s*(.*)  \s*([0-9.]+,[0-9]{2})\s*([0-9.]+,[0-9]{2}).*$")
 regexElementLineTextOnly = re.compile("\s*[^\s]+\s*")
 regexEmptyLine = re.compile("\s*[^\s]+\s*")
 regexDateTTMMYYYY = re.compile("([0-9]{1,2})\.([0-9]{1,2})\.([0-9]{4})")
@@ -53,7 +53,7 @@ def handleElementLine(elementLineObj, bz):
         returnValue[iterator].sollHabenKZ = "H"
     else:
         returnValue[iterator].sollHabenKZ = "S"
-    if elementLineObj.elementText.__contains__("Reparatur an o.g. Aufzugsanlage"):
+    if elementLineObj.elementText.__contains__("Reparatur an o. g. Aufzugsanlagen"):
         # element is for repairs
         returnValue[iterator].gegenkonto = "8403"
         # filling the prices is not yet implemented
@@ -73,7 +73,7 @@ def handleElementLine(elementLineObj, bz):
             if not (elementLineObj.quantity == 1):
                 # price is already given in smaller unit --> take that price for partial revokation
                 returnValue[iterator].umsatz = Decimal(float(elementLineObj.unitPrice.replace(",","."))).quantize(Decimal("0.01")) * (Decimal(float(elementLineObj.quantity)) - Decimal(1))
-                returnValue[iterator].umsatz = str(float(returnValue[iterator]))
+                returnValue[iterator].umsatz = str(float(returnValue[iterator].umsatz))
             else:
                 # price is given in one total for the entire year
                 returnValue[iterator].umsatz = Decimal(float(elementLineObj.unitPrice.replace(",","."))/12*11).quantize(Decimal("0.01"))
@@ -103,7 +103,7 @@ def handleElementLine(elementLineObj, bz):
             if not (elementLineObj.quantity == 1):
                 # price is already given in smaller unit --> take that price for partial revokation
                 returnValue[iterator].umsatz = Decimal(float(elementLineObj.unitPrice.replace(",","."))).quantize(Decimal("0.01")) * (Decimal(float(elementLineObj.quantity)) - Decimal(1))
-                returnValue[iterator].umsatz = str(float(returnValue[iterator]))
+                returnValue[iterator].umsatz = str(float(returnValue[iterator].umsatz))
             else:
                 # price is given in one total for the entire year
                 returnValue[iterator].umsatz = Decimal(float(elementLineObj.unitPrice.replace(",","."))/12*11).quantize(Decimal("0.01"))
@@ -158,9 +158,10 @@ def getSpecialInformation(file,bz):
             # is not 13b search for and evaluate table with code segment below
             pass
 
-    initialLineMulitlinePosFound = 0
+    initialLineMultilinePosFound = 0
     positionText = ""
     elementLineObj = elementLine()
+    isRepairInvoice = 0
     # get information from the table
     for i in range(0,len(linesOfFile)):
         if tableHeaderFound == 0:
@@ -192,30 +193,43 @@ def getSpecialInformation(file,bz):
                 # check for initial line of multiline position first
                 matcherObj = regexInitialLine.match(linesOfFile[i])
                 if (
-                            (matcherObj)
-                        and (initialLineMulitlinePosFound == 0)
+                           (matcherObj)
+                        and(isRepairInvoice == 1)
                    ):
+                    # full line but repair invoice (section) detected : add elementTotals until new type of invoice (section) is detected
+                    elementLineObj.elementTotal = elementLineObj.elementTotal.replace(".","").replace(",",".")
+                    elementLineObj.elementTotal = float(elementLineObj.elementTotal)
+                    secondSummand = matcherObj.group(5).replace(".","").replace(",",".")
+                    secondSummand = float(secondSummand)
+                    elementLineObj.elementTotal = elementLineObj.elementTotal + secondSummand
+                    elementlineObj.elementTotal = str(elementLineObj.elementTotal).replace(".",",")
+                elif (
+                            (matcherObj)
+                        and (initialLineMultilinePosFound == 0)
+                     ):
                     #found initial line of multiline position and it is the first line of that kind
                     #copy contents of that line in the elementLine element and keep walking through the table for remaining lines and elements
                     #the element line will be evaluated once either another elementline is found or the table end is reached
-                    initialLineMulitlinePosFound = 1
+                    initialLineMultilinePosFound = 1
                     elementLineObj.positionNr = matcherObj.group(1)
                     elementLineObj.quantity = matcherObj.group(2)
                     elementLineObj.elementText = matcherObj.group(3)
                     elementLineObj.unitPrice = matcherObj.group(4)
                     elementLineObj.elementTotal = matcherObj.group(5)
-                elif initialLineMulitlinePosFound == 1:
-                    #does not match initial line pattern and initialline is already found thus may be consecutive line or empty line
-                    matcherObj = regexElementLineTextOnly.match(linesOfFile[i])
-                    if matcherObj:
-                        #non empty line --> append to elementText
-                        elementLineObj.elementText += linesOfFile[i] # will add entire line but since line only consists of whitespace and the text that is no big deal. Whitespace sequences >2 will be removed after conversion to CSV string and before writing to the file.
-                    else:
-                        #empty line
-                        pass
+                elif(
+                        not(matcherObj)
+                        and(initialLineMultilinePosFound == 0)
+                        and(regexElementLineTextOnly.match(linesOfFile[i]))
+                        and(linesOfFile[i].__contains__("Reparatur an o. g. Aufzugsanlagen"))
+                    ):
+                    # repair invoice starts out with text only line in table
+                    isRepairInvoice = 1
+                    elementLineObj.elementText += linesOfFile[i] 
+                    elementLineObj.elementTotal = "0,00"
                 elif (
                            (matcherObj)
-                        and(initialLineMulitlinePosFound == 1)
+                        and(initialLineMultilinePosFound == 1)
+                        and(isRepairInvoice == 0)
                      ):
 
                     # initial line of multiline position but previous multiline position existed thus there needs to be special handling for writing the current bz object to the file and then creating a new one. 
@@ -236,6 +250,15 @@ def getSpecialInformation(file,bz):
                     returnValue.append(bz) # add the bz object (that has not been modified since all actions are directly done in the return value object) to the returnValue to essentially copy the common "meta" information (like invoice no. etc)
                     # then replace old element line with new elementline and try to fill that to an end
                     elementLineObj = newElementLine
+                elif initialLineMultilinePosFound == 1:
+                    #does not match initial line pattern and initialline is already found thus may be consecutive line or empty line
+                    matcherObj = regexElementLineTextOnly.match(linesOfFile[i])
+                    if matcherObj:
+                        #non empty line --> append to elementText
+                        elementLineObj.elementText += linesOfFile[i] # will add entire line but since line only consists of whitespace and the text that is no big deal. Whitespace sequences >2 will be removed after conversion to CSV string and before writing to the file.
+                    else:
+                        #empty line
+                        pass
                 else:
                     # first element line may also be incomplete as in repair invoices... 
                     # thus check for incomplete non empty line
@@ -245,6 +268,7 @@ def getSpecialInformation(file,bz):
                         elementLineObj.elementText += linesOfFile[i] # will add entire line but since line only consists of whitespace and the text that is no big deal. Whitespace sequences >2 will be removed after conversion to CSV string and before writing to the file.
                     else:
                         #empty line
+                        print("empty line")
                         pass
 
 def cleanupDate(bz):
@@ -337,7 +361,8 @@ def main():
             txtfilelist = []
             os.chdir(inputfoldername)
             if platform.system() == "Windows":
-                txtfilelist = ["AR_23400001_20230103.pdf.txt", "AR_23400002_20230103.pdf.txt", "AR_23400003_20230103.pdf.txt"]
+                #txtfilelist = ["AR_23400001_20230103.pdf.txt", "AR_23400002_20230103.pdf.txt", "AR_23400003_20230103.pdf.txt"]
+                txtfilelist = ["AR_23400003_20230103.pdf.txt"]
             else:
                 sp = sub.Popen(['ls'],stdout=sub.PIPE)
                 output, _ = sp.communicate()
