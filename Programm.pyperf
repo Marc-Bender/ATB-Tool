@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<ProfilingTarget xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ProjectTarget>
+    <TargetProject>20b1aac2-cf61-4e8a-bbb3-35e2d2ad4645</TargetProject>
+    <FriendlyName>Programm</FriendlyName>
+  </ProjectTarget>
+  <Reports>
+    <Report>
+      <Filename>C:\Users\marc\AppData\Local\Temp\Programm_20230211(1).vsp</Filename>
+    </Report>
+    <Report>
+      <Filename>C:\Users\marc\AppData\Local\Temp\Programm_20230211(2).vsp</Filename>
+    </Report>
+  </Reports>
+</ProfilingTarget>
