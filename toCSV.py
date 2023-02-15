@@ -35,7 +35,7 @@ regexEndbetrag = re.compile(".*Endbetrag EUR.*")
 regexGesamtsumme = re.compile("^.*([0-9\.],[0-9]{2})\s*$")
 regexElementLineFull = re.compile("^.*Pos\..*Menge.* Einh\..*Artikelbezeichnung.*Einzelpreis.*Gesamtpreis.*$")
 regexEndOfTable = re.compile("^.*Bitte geben Sie bei Zahlungen unbedingt die Rechnungsnummer an\..*$")
-regexInitialLine = re.compile("^\s*([0-9]+)\s*([0-9\,\. ]+)\s*(.*)  \s*([0-9.]+,[0-9]{2})\s*([0-9.]+,[0-9]{2}).*$")
+regexInitialLine = re.compile("^\s*([0-9]+)\s*([0-9\,\. \-]+)\s*(.*)  \s*([0-9.]+,[0-9]{2})\s*([0-9\.\,\-]+,[0-9]{2}).*$")
 regexElementLineTextOnly = re.compile("\s*[^\s]+\s*")
 regexEmptyLine = re.compile("\s*[^\s]+\s*")
 regexDateTTMMYYYY = re.compile("([0-9]{1,2})\.([0-9]{1,2})\.([0-9]{4})")
@@ -51,9 +51,11 @@ isTUEVString = "TÜV - Hauptprüfung"
 def handleElementLine(elementLineObj, bz):
     returnValue = [bz]
     iterator = 0
+    elementLineObj.elementText = elementLineObj.elementText.replace("\n","")
     if elementLineObj.elementTotal.__contains__("-"):
         #negative number --> haben
         returnValue[iterator].sollHabenKZ = "H"
+        elementLineObj.elementTotal = elementLineObj.elementTotal.replace("-","")
     else:
         returnValue[iterator].sollHabenKZ = "S"
     if elementLineObj.elementText.__contains__(isRepairString):
@@ -63,7 +65,7 @@ def handleElementLine(elementLineObj, bz):
     elif elementLineObj.elementText.__contains__("Notrufvertrag"):
         returnValue[iterator].konto = "8402" # TODO: check if correct (duplicate entry in table)
         #check if current year or previous year
-        matcherObj = regexNotrufvertragJahr.match(elementLineObj.elementText)
+        matcherObj = regexNotrufvertragJahr.match(elementLineObj.elementText.replace("\n",""))
         returnValue[iterator].umsatz = elementLineObj.elementTotal # for the inial line full price, then if current year inject partial lines with negative (ie inverted S/H)
         if (
                     (matcherObj)
@@ -92,8 +94,8 @@ def handleElementLine(elementLineObj, bz):
     elif elementLineObj.elementText.__contains__("Wartung"):
         # element is for maintainance
         returnValue[iterator].konto = "8404"
-        matcherObj = regexWartungsvertragJahr.match(elementLineObj.elementText)
-        returnValue[iterator].umsatz = elementLineObj.elementTotal # for the inial line full price, then if current year inject partial lines with negative (ie inverted S/H)
+        matcherObj = regexWartungsvertragJahr.match(elementLineObj.elementText.replace("",""))
+        returnValue[iterator].umsatz = str(float(elementLineObj.elementTotal.replace(".","").replace(",",".")) * 1.19)  # for the inial line full price, then if current year inject partial lines with negative (ie inverted S/H)
         if (
                     (matcherObj)
                 and (returnValue[iterator].belegdatum.__contains__(matcherObj.group(1)))
@@ -104,10 +106,10 @@ def handleElementLine(elementLineObj, bz):
             returnValue.append(bz)
             if not (elementLineObj.quantity == 1):
                 # price is already given in smaller unit --> take that price for partial revokation
-                returnValue[iterator].umsatz = str(float(elementLineObj.unitPrice.replace(".","").replace(",", ".")) * (float(elementLineObj.quantity.replace(".","").replace(",",".")) - 1))
+                returnValue[iterator].umsatz = str(float(elementLineObj.unitPrice.replace(".","").replace(",", ".")) * (float(elementLineObj.quantity.replace(".","").replace(",",".")) - 1) * 1.19)
             else:
                 # price is given in one total for the entire year
-                returnValue[iterator].umsatz = str(float(elementLineObj.unitPrice.replace(",","."))*11/12).replace(".",",")
+                returnValue[iterator].umsatz = str(float(elementLineObj.unitPrice.replace(",","."))*1.19*11/12).replace(".",",")
             if returnValue[iterator - 1].sollHabenKZ == "S":
                 returnValue[iterator].sollHabenKZ = "H"
             else:
@@ -117,16 +119,24 @@ def handleElementLine(elementLineObj, bz):
             else:
                 returnValue[iterator].sollHabenKZ = "S"
         elif (
-                    (matcherObj)
-                and not(returnValue[iterator].belegdatum.__contains__(matcherObj.group(1)))
+                    (
+                            (matcherObj)
+                        and not(returnValue[iterator].belegdatum.__contains__(matcherObj.group(1)))
+                    )
+                 or (
+                        not (matcherObj)
+                        and not(elementLineObj.elementText.__contains__(returnValue[iterator].belegdatum.rsplit(".")[0]))
+                    )
              ):
             # previous year
             returnValue[iterator].konto = "8888" # dummy for previous year overhang stuff
+            returnValue[iterator].umsatz = str(float(elementLineObj.elementTotal.replace(".","").replace(",",".")) * 1.19).replace(".",",")
     elif (elementLineObj.elementText.__contains__(isTUEVString)):
         returnValue[iterator].konto = "8406"
         returnValue[iterator].umsatz = str(float(elementLineObj.elementTotal.replace(".","").replace(",",".")) * 1.19).replace(".",",")
     else:
-        pass
+        returnValue[iterator].konto = "8400"
+        returnValue[iterator].umsatz = str(float(elementLineObj.elementTotal.replace(".","").replace(",",".")) * 1.19).replace(".",",")
 
     return [returnValue, iterator]
 
@@ -225,10 +235,12 @@ def getSpecialInformation(file,bz):
                 elif(
                         not(matcherObj)
                         and(initialLineMultilinePosFound == 0)
+                        and(startsWithTextOnlyLine == 0)
                         and(regexElementLineTextOnly.match(linesOfFile[i]))
                         and(
                                   (linesOfFile[i].__contains__(isRepairString))
                                 or(linesOfFile[i].__contains__(isTUEVString))
+                                or(linesOfFile[i].__contains__("Wartung"))
                            )
                     ):
                     # repair invoice starts out with text only line in table
@@ -402,7 +414,8 @@ def main():
             os.chdir(inputfoldername)
             if platform.system() == "Windows":
                 #txtfilelist = ["AR_23400001_20230103.pdf.txt", "AR_23400002_20230103.pdf.txt", "AR_23400003_20230103.pdf.txt"]
-                txtfilelist = ["AR_23400004_20230103.pdf.txt"]
+                #txtfilelist = ["AR_23400004_20230103.pdf.txt"]
+                txtfilelist = ["AR_23400002_20230103.pdf.txt"]
             else:
                 sp = sub.Popen(['ls'],stdout=sub.PIPE)
                 output, _ = sp.communicate()
