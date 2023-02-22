@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import platform
+import copy
 
 from datevCSV import datevBuchungszeileBuchungsstapelformat as buZeile
 from elementLine import *
@@ -14,7 +15,7 @@ outputfilename = ""
 inputfoldername = ""
 
 dryRun = 1
-debuggingActive = 1
+debuggingActive = 0
 
 regexNotrufvertragJahr = re.compile(".*Vertragsjahr ([0-9]{4}).*")
 regexWartungsvertragJahr = re.compile(".*Wartungsjahr ([0-9]{4}).*")
@@ -37,7 +38,7 @@ isRepairString = "Reparatur"
 isTUEVString = "TÜV - Hauptprüfung"
 
 def handleElementLine(elementLineObj, bz):
-    returnValue = [bz]
+    returnValue = [copy.deepcopy(bz)]
     iterator = 0
     elementLineObj.elementText = elementLineObj.elementText.replace("\n","")
     if elementLineObj.elementTotal.__contains__("-"):
@@ -53,7 +54,7 @@ def handleElementLine(elementLineObj, bz):
     elif elementLineObj.elementText.__contains__("Notrufvertrag"):
         returnValue[iterator].konto = "8402" # TODO: check if correct (duplicate entry in table)
         #check if current year or previous year
-        matcherObj = regexNotrufvertragJahr.match(elementLineObj.elementText.replace("\n",""))
+        matcherObj = regexNotrufvertragJahr.match(elementLineObj.elementText)
         returnValue[iterator].umsatz = elementLineObj.elementTotal # for the inial line full price, then if current year inject partial lines with negative (ie inverted S/H)
         if (
                     (matcherObj)
@@ -62,7 +63,8 @@ def handleElementLine(elementLineObj, bz):
             # current year, thus inject bz object
             
             iterator += 1
-            returnValue.append(bz)
+            returnValue.append(copy.deepcopy(bz))
+            returnValue[iterator].konto = "8402"
             if not (elementLineObj.quantity == 1):
                 # price is already given in smaller unit --> take that price for partial revokation
                 returnValue[iterator].umsatz = str(float(elementLineObj.unitPrice.replace(".","").replace(",",".")) * (float(elementLineObj.quantity.replace(".","").replace(",",".")) - 1))
@@ -82,7 +84,7 @@ def handleElementLine(elementLineObj, bz):
     elif elementLineObj.elementText.__contains__("Wartung"):
         # element is for maintainance
         returnValue[iterator].konto = "8404"
-        matcherObj = regexWartungsvertragJahr.match(elementLineObj.elementText.replace("",""))
+        matcherObj = regexWartungsvertragJahr.match(elementLineObj.elementText)
         returnValue[iterator].umsatz = str(float(elementLineObj.elementTotal.replace(".","").replace(",",".")) * 1.19)  # for the inial line full price, then if current year inject partial lines with negative (ie inverted S/H)
         if (
                     (matcherObj)
@@ -91,13 +93,23 @@ def handleElementLine(elementLineObj, bz):
             # current year, thus inject bz object
             
             iterator += 1
-            returnValue.append(bz)
-            if not (elementLineObj.quantity == 1):
+            returnValue.append(copy.deepcopy(bz))
+            returnValue[iterator].konto = "8404"
+            if (
+                    not (int(elementLineObj.quantity) == 1)
+                    and (int(elementLineObj.quantity) > 1) # positive quantity
+               ):
                 # price is already given in smaller unit --> take that price for partial revokation
                 returnValue[iterator].umsatz = str(float(elementLineObj.unitPrice.replace(".","").replace(",", ".")) * (float(elementLineObj.quantity.replace(".","").replace(",",".")) - 1) * 1.19)
+            elif (
+                    not (int(elementLineObj.quantity) == -1)
+                    and (int(elementLineObj.quantity) < -1) # negative quantity
+               ):
+                # price is already given in smaller unit --> take that price for partial revokation
+                returnValue[iterator].umsatz = str(float(elementLineObj.unitPrice.replace(".","").replace(",", ".")) * (float(elementLineObj.quantity.replace(".","").replace(",",".")) + 1) * 1.19)
             else:
                 # price is given in one total for the entire year
-                returnValue[iterator].umsatz = str(float(elementLineObj.unitPrice.replace(",","."))*1.19*11/12).replace(".",",")
+                returnValue[iterator].umsatz = str(float(elementLineObj.unitPrice.replace(".","").replace(",","."))*1.19*11/12).replace(".",",")
             if returnValue[iterator - 1].sollHabenKZ == "S":
                 returnValue[iterator].sollHabenKZ = "H"
             else:
@@ -129,24 +141,21 @@ def handleElementLine(elementLineObj, bz):
     return [returnValue, iterator]
 
 def getSpecialInformation(file,bz):
-    returnValue = [bz]
+    returnValue = [copy.deepcopy(bz)]
     iterator = 0
-    file = open(file, "r")
-    linesOfFile = file.readlines()
-    file.close()
     i = 0
     tableHeaderFound = 0
     tableEndFound = 0
     # check for 13b first
-    for i in range(0,len(linesOfFile)):
-        matcherObj = regex13b.match(linesOfFile[i])
+    for i in range(0,len(file)):
+        matcherObj = regex13b.match(file[i])
         if matcherObj:
             # is 13b, get total --> thus search for line with total
-            for j in range(0,i): # total line will be above 13b line
-                matcherObj = regexEndbetrag.match(linesOfFile[j])
+            for j in range(i,-1,-1): # total line will be above 13b line so go backwards until 0 (because -1 is not in the range anymore) with a step size of 1
+                matcherObj = regexEndbetrag.match(file[j])
                 if matcherObj:
                     # found total line information needed is in next line down
-                    matcherObj = regexGesamtsumme.match(linesOfFile[j+1])
+                    matcherObj = regexGesamtsumme.match(file[j+1])
                     if matcherObj:
                         # line matches
                         returnValue[iterator].umsatz = matcherObj.group(1).replace(".","") # get total price and remove thousends deliminator
@@ -155,7 +164,7 @@ def getSpecialInformation(file,bz):
                         return returnValue, iterator; # bz object is already filled --> function can terminate to allow writing the bz object to output file and continue with next file
                     else:
                         print("Dateiformatfehler in Datei " + file)
-                        return [["Fehler"],0];
+                        return ["Fehler",0];
                 else:
                     # not found --> keep searching
                     pass
@@ -168,10 +177,10 @@ def getSpecialInformation(file,bz):
     elementLineObj = elementLine()
     startsWithTextOnlyLine = 0
     # get information from the table
-    for i in range(0,len(linesOfFile)):
+    for i in range(0,len(file)):
         if tableHeaderFound == 0:
             # table header not found seek to position of table
-            matcherObj = regexElementLineFull.match(linesOfFile[i])
+            matcherObj = regexElementLineFull.match(file[i])
             if matcherObj:
                 tableHeaderFound = 1
             else:
@@ -179,7 +188,7 @@ def getSpecialInformation(file,bz):
                 pass
         else:
             # table header found but table end not reached --> do checks
-            matcherObj = regexEndOfTable.match(linesOfFile[i])
+            matcherObj = regexEndOfTable.match(file[i])
             if matcherObj:
                 # table end found; but the handling of the element line(s) has not been done for the last element thus handle the element line then exit the loop, but then there is nothing to do anymore thus return from the function
                 returnValueElementLine, iteratorElementLine = handleElementLine(elementLineObj, returnValue[iterator]);
@@ -188,15 +197,16 @@ def getSpecialInformation(file,bz):
                     # special case when iterator == 1 will be handled correctly by this too
                     returnValue.pop() #.pop the last line since it will be the first line in the returnvalueElementLine Object
                     for value in returnValueElementLine:
-                        returnValue.append(value) # will add the previously deleted line (populated with more values) + all the lines that were generated on top of that
+                        returnValue.append(copy.deepcopy(value)) # will add the previously deleted line (populated with more values) + all the lines that were generated on top of that
+                    return [returnValue, iterator + 1];
                 else: # iteratorElementLine == 0: 
-                    # fault occured --> think of how to handle the file format errror
-                    pass # dummy
+                    # fault occured --> think of how to handle the file format errror oddly this pass makes loads of invoices register correctly in the output
+                    returnValue[iterator] = copy.deepcopy(returnValueElementLine[0])
                 return [returnValue, iterator + 1];
             else:
                 # table end not found check for various special cases
                 # check for initial line of multiline position first
-                matcherObj = regexInitialLine.match(linesOfFile[i])
+                matcherObj = regexInitialLine.match(file[i])
                 if (
                            (matcherObj)
                         and(startsWithTextOnlyLine == 1)
@@ -224,16 +234,16 @@ def getSpecialInformation(file,bz):
                         not(matcherObj)
                         and(initialLineMultilinePosFound == 0)
                         and(startsWithTextOnlyLine == 0)
-                        and(regexElementLineTextOnly.match(linesOfFile[i]))
+                        and(regexElementLineTextOnly.match(file[i]))
                         and(
-                                  (linesOfFile[i].__contains__(isRepairString))
-                                or(linesOfFile[i].__contains__(isTUEVString))
-                                or(linesOfFile[i].__contains__("Wartung"))
+                                  (file[i].__contains__(isRepairString))
+                                or(file[i].__contains__(isTUEVString))
+                                or(file[i].__contains__("Wartung"))
                            )
                     ):
                     # repair invoice starts out with text only line in table
                     startsWithTextOnlyLine = 1
-                    elementLineObj.elementText += linesOfFile[i] 
+                    elementLineObj.elementText += file[i] 
                     elementLineObj.elementTotal = "0,00"
                 elif (
                            (matcherObj)
@@ -253,28 +263,28 @@ def getSpecialInformation(file,bz):
                     returnValueElementLine, iteratorElementLine = handleElementLine(elementLineObj, returnValue[iterator])
                     for element in returnValueElementLine:
                         #this will lead to duplicate entries in the returnValue object think this through better
-                        returnValue.append(element)
+                        returnValue.append(copy.deepcopy(element))
                     # increment the iterator so that when the new elementline is fully filled and either the end of the table is reached or the next element line is found the another bz object is generated in the returnValue array
                     iterator += 1
-                    returnValue.append(bz) # add the bz object (that has not been modified since all actions are directly done in the return value object) to the returnValue to essentially copy the common "meta" information (like invoice no. etc)
+                    returnValue.append(copy.deepcopy(bz)) # add the bz object (that has not been modified since all actions are directly done in the return value object) to the returnValue to essentially copy the common "meta" information (like invoice no. etc)
                     # then replace old element line with new elementline and try to fill that to an end
                     elementLineObj = newElementLine
                 elif initialLineMultilinePosFound == 1:
                     #does not match initial line pattern and initialline is already found thus may be consecutive line or empty line
-                    matcherObj = regexElementLineTextOnly.match(linesOfFile[i])
+                    matcherObj = regexElementLineTextOnly.match(file[i])
                     if matcherObj:
                         #non empty line --> append to elementText
-                        elementLineObj.elementText += linesOfFile[i] # will add entire line but since line only consists of whitespace and the text that is no big deal. Whitespace sequences >2 will be.popd after conversion to CSV string and before writing to the file.
+                        elementLineObj.elementText += file[i] # will add entire line but since line only consists of whitespace and the text that is no big deal. Whitespace sequences >2 will be.popd after conversion to CSV string and before writing to the file.
                     else:
                         #empty line
                         pass
                 else:
                     # first element line may also be incomplete as in repair invoices... 
                     # thus check for incomplete non empty line
-                    matcherObj = regexEmptyLine.match(linesOfFile[i])
+                    matcherObj = regexEmptyLine.match(file[i])
                     if matcherObj:
                         #non empty line --> append to elementText, since element Text is empty by default there is no harm in doing so
-                        elementLineObj.elementText += linesOfFile[i] # will add entire line but since line only consists of whitespace and the text that is no big deal. Whitespace sequences >2 will be.popd after conversion to CSV string and before writing to the file.
+                        elementLineObj.elementText += file[i] # will add entire line but since line only consists of whitespace and the text that is no big deal. Whitespace sequences >2 will be.popd after conversion to CSV string and before writing to the file.
                     else:
                         #empty line
                         pass
@@ -290,56 +300,7 @@ def cleanupDate(bz):
     return bz
 
 def getGeneralInformation(file,bz):
-    file = open(file, "r")
-    linesOfFile = file.readlines()
-    file.close()
-    for line in linesOfFile:
-        matcherObj = regexKundennr.match(line)
-
-        if matcherObj:
-            bz.buchungstext += matcherObj.group(1)
-            bz.gegenkonto = matcherObj.group(2)
-        else:
-            pass
-        matcherObj = regexRechnungsnr.match(line)
-
-        if matcherObj:
-            bz.buchungstext += matcherObj.group(1)
-            bz.belegfeld1 = matcherObj.group(2)
-        else:
-            pass
-
-        matcherObj = regexGutschriftsnr.match(line)
-
-        if matcherObj:
-            bz.buchungstext += matcherObj.group(1)
-            bz.belegfeld1 = matcherObj.group(2)
-        else:
-            pass
-
-        matcherObj = regexBelegdatum.match(line)
-        
-        if matcherObj:
-            bz.buchungstext += matcherObj.group(1)
-            bz.belegdatum = matcherObj.group(2)
-        else:
-            pass
-
-        matcherObj = regexAufzugsnr.match(line)
-
-        if matcherObj:
-            bz.belegfeld2 = matcherObj.group(1)
-        else:
-            pass
-
-        matcherObj = regexBuchungstext.match(line)
-
-        if matcherObj:
-            bz.buchungstext += matcherObj.group(1)
-        else:
-            pass
-            
-
+    for line in file:
         #check if all low hanging fruits are already picked up (ie. easy fields are filled)
         if (
                 (not(bz.buchungstext == ""))
@@ -351,16 +312,67 @@ def getGeneralInformation(file,bz):
         else:
             pass # continue gathering the information
 
+        matcherObj = regexKundennr.match(line)
+
+        if matcherObj:
+            bz.buchungstext += matcherObj.group(1)
+            bz.gegenkonto = matcherObj.group(2)
+            continue
+        else:
+            pass
+        matcherObj = regexRechnungsnr.match(line)
+
+        if matcherObj:
+            bz.buchungstext += matcherObj.group(1)
+            bz.belegfeld1 = matcherObj.group(2)
+            continue
+        else:
+            pass
+
+        matcherObj = regexGutschriftsnr.match(line)
+
+        if matcherObj:
+            bz.buchungstext += matcherObj.group(1)
+            bz.belegfeld1 = matcherObj.group(2)
+            continue
+        else:
+            pass
+
+        matcherObj = regexBelegdatum.match(line)
+        
+        if matcherObj:
+            bz.buchungstext += matcherObj.group(1)
+            bz.belegdatum = matcherObj.group(2)
+            continue
+        else:
+            pass
+
+        matcherObj = regexAufzugsnr.match(line)
+
+        if matcherObj:
+            bz.belegfeld2 = matcherObj.group(1)
+            continue
+        else:
+            pass
+
+        matcherObj = regexBuchungstext.match(line)
+
+        if matcherObj:
+            bz.buchungstext += matcherObj.group(1)
+            continue
+        else:
+            pass
+            
     if bz.buchungstext.replace(" ","") == "":
         # maybe Gutschrift -> metadata is shifted downwards
         startOfAddressFieldFound = 0
-        for i in range(0,len(linesOfFile)):
-            if linesOfFile[i].__contains__("ATB-Aufzugstechnik GmbH, Poensgen u. Pfahler Str. 4, 66386 St. Ingbert"):
+        for i in range(0,len(file)):
+            if file[i].__contains__("ATB-Aufzugstechnik GmbH, Poensgen u. Pfahler Str. 4, 66386 St. Ingbert"):
                 startOfAddressFieldFound = 1
-            elif linesOfFile[i].__contains__("Gutschrift"):
+            elif file[i].__contains__("Gutschrift"):
                 break
             elif startOfAddressFieldFound == 1:
-                bz.buchungstext += linesOfFile[i]
+                bz.buchungstext += file[i]
             else:
                 pass # should be unreachable
         bz.buchungstext = bz.buchungstext.replace("  ", "").replace("\n", " ")
@@ -401,10 +413,10 @@ def main():
             txtfilelist = []
             os.chdir(inputfoldername)
             if platform.system() == "Windows":
-                #txtfilelist = ["AR_23400001_20230103.pdf.txt", "AR_23400002_20230103.pdf.txt", "AR_23400003_20230103.pdf.txt"]
+                txtfilelist = ["AR_23400001_20230103.pdf.txt", "AR_23400002_20230103.pdf.txt", "AR_23400003_20230103.pdf.txt"]
                 #txtfilelist = ["AR_23400004_20230103.pdf.txt"]
                 #txtfilelist = ["AR_23400002_20230103.pdf.txt"]
-                txtfilelist = ["AR_23400816_20230116.pdf.txt"]
+                #txtfilelist = ["AR_23400816_20230116.pdf.txt"]
             else:
                 sp = sub.Popen(['ls'],stdout=sub.PIPE)
                 output, _ = sp.communicate()
@@ -412,7 +424,7 @@ def main():
                 output = re.split(";", output)
                 for element in output:
                     if str(element).__contains__(".pdf.txt"):
-                        txtfilelist.append(element)
+                        txtfilelist.append(copy.deepcopy(element))
                     else:
                         pass
             outputfile = open(outputfilename, "w+")
@@ -421,8 +433,13 @@ def main():
                 bz = buZeile()
                 bz.beleginfoArt1 = "Kunden PDF Name"
                 bz.beleginfoInhalt1 = str(file).replace(".txt", "")
-                returnedBZ = getGeneralInformation(file,bz)
-                returnedLines, iterator = getSpecialInformation(file,returnedBZ)
+
+                fileHandle = open(file, "r")
+                linesOfFile = fileHandle.readlines()
+                fileHandle.close()
+
+                returnedBZ = getGeneralInformation(linesOfFile,bz)
+                returnedLines, iterator = getSpecialInformation(linesOfFile,returnedBZ)
                 if iterator > 0:
                     for line in returnedLines:
                         line.umsatz = line.umsatz.replace(".",",")
