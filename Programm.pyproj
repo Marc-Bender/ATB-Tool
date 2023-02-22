@@ -25,6 +25,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="datevCSV.py" />
+    <Compile Include="elementLine.py" />
     <Compile Include="toCSV.py" />
   </ItemGroup>
   <ItemGroup>

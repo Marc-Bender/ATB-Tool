@@ -7,26 +7,14 @@ import sys
 import platform
 
 from datevCSV import datevBuchungszeileBuchungsstapelformat as buZeile
+from elementLine import *
 
 outputfile = ""
 outputfilename = ""
 inputfoldername = ""
 
 dryRun = 1
-debuggingActive = 0
-
-class elementLine:
-    positionNr: str = ""
-    elementText: str = ""
-    quantity: str = ""
-    unitPrice: str = ""
-    elementTotal: str = ""
-    def __init__(self):
-        positionNr = ""
-        elementText = ""
-        quantity = ""
-        unitPrice = ""
-        elementTotal = ""
+debuggingActive = 1
 
 regexNotrufvertragJahr = re.compile(".*Vertragsjahr ([0-9]{4}).*")
 regexWartungsvertragJahr = re.compile(".*Wartungsjahr ([0-9]{4}).*")
@@ -415,7 +403,8 @@ def main():
             if platform.system() == "Windows":
                 #txtfilelist = ["AR_23400001_20230103.pdf.txt", "AR_23400002_20230103.pdf.txt", "AR_23400003_20230103.pdf.txt"]
                 #txtfilelist = ["AR_23400004_20230103.pdf.txt"]
-                txtfilelist = ["AR_23400002_20230103.pdf.txt"]
+                #txtfilelist = ["AR_23400002_20230103.pdf.txt"]
+                txtfilelist = ["AR_23400816_20230116.pdf.txt"]
             else:
                 sp = sub.Popen(['ls'],stdout=sub.PIPE)
                 output, _ = sp.communicate()
